@@ -1,0 +1,192 @@
+-- =============================================================================
+-- VIS_LOGGER.KL
+-- Vision Data Logger for CNC Workcell
+-- Author: Barath Kumar JK
+-- Date: Jan-May 2025
+-- =============================================================================
+--
+-- This KAREL program logs vision data to a CSV file on the controller.
+-- Called from TP program UTIL_LOG after each successful cycle.
+--
+-- Log format:
+-- Timestamp, Cycle, Score, X_Offset, Y_Offset, R_Offset, Cycle_Time, Retry
+-- =============================================================================
+
+PROGRAM vis_logger
+
+%NOLOCKGROUP
+%COMMENT = 'Vision Data Logger'
+%ALPHABETIZE
+
+VAR
+    -- File handling
+    file_id     : FILE
+    file_name   : STRING[64]
+    file_status : INTEGER
+    
+    -- Data registers
+    cycle_num   : INTEGER
+    vis_score   : REAL
+    x_offset    : REAL
+    y_offset    : REAL
+    r_offset    : REAL
+    cycle_time  : REAL
+    retry_flag  : INTEGER
+    
+    -- Timestamp
+    year_val    : INTEGER
+    month_val   : INTEGER
+    day_val     : INTEGER
+    hour_val    : INTEGER
+    min_val     : INTEGER
+    sec_val     : INTEGER
+    
+    -- Status
+    status      : INTEGER
+    entry       : INTEGER
+
+CONST
+    LOG_PATH = 'MD:\LOGS\'
+    MAX_LOG_SIZE = 100000  -- Max file size in bytes
+
+-- =============================================================================
+-- ROUTINE: get_timestamp
+-- Gets current date/time from controller
+-- =============================================================================
+ROUTINE get_timestamp
+BEGIN
+    GET_TIME(year_val, month_val, day_val, hour_val, min_val, sec_val)
+END get_timestamp
+
+-- =============================================================================
+-- ROUTINE: read_registers
+-- Reads data from TP registers R[80-86]
+-- =============================================================================
+ROUTINE read_registers
+VAR
+    real_val : REAL
+    int_val  : INTEGER
+BEGIN
+    -- Read from TP registers
+    GET_REG(80, FALSE, int_val, real_val, status)
+    cycle_num = int_val
+    
+    GET_REG(81, TRUE, int_val, real_val, status)
+    vis_score = real_val
+    
+    GET_REG(82, TRUE, int_val, real_val, status)
+    x_offset = real_val
+    
+    GET_REG(83, TRUE, int_val, real_val, status)
+    y_offset = real_val
+    
+    GET_REG(84, TRUE, int_val, real_val, status)
+    r_offset = real_val
+    
+    GET_REG(85, TRUE, int_val, real_val, status)
+    cycle_time = real_val
+    
+    GET_REG(86, FALSE, int_val, real_val, status)
+    retry_flag = int_val
+END read_registers
+
+-- =============================================================================
+-- ROUTINE: check_file_size
+-- Rotates log file if too large
+-- =============================================================================
+ROUTINE check_file_size
+VAR
+    file_size : INTEGER
+    old_name  : STRING[64]
+    new_name  : STRING[64]
+BEGIN
+    -- Get file size
+    FILE_SIZE(file_name, file_size, status)
+    
+    IF (status = 0) AND (file_size > MAX_LOG_SIZE) THEN
+        -- Rotate log file
+        old_name = file_name
+        new_name = LOG_PATH + 'vision_log_old.csv'
+        
+        -- Delete old backup if exists
+        DELETE_FILE(new_name, TRUE, status)
+        
+        -- Rename current to backup
+        RENAME_FILE(old_name, new_name, TRUE, status)
+    ENDIF
+END check_file_size
+
+-- =============================================================================
+-- ROUTINE: write_header
+-- Writes CSV header if file is new
+-- =============================================================================
+ROUTINE write_header
+BEGIN
+    WRITE file_id ('Timestamp,Cycle,Score,X_Offset,Y_Offset,R_Offset,Cycle_Time_ms,Retry')
+    WRITE file_id (CR)
+END write_header
+
+-- =============================================================================
+-- ROUTINE: write_data
+-- Writes cycle data to log file
+-- =============================================================================
+ROUTINE write_data
+VAR
+    timestamp_str : STRING[32]
+BEGIN
+    -- Format timestamp
+    CNV_INT_STR(year_val, 4, 0, timestamp_str)
+    timestamp_str = timestamp_str + '-'
+    CNV_INT_STR(month_val, 2, 0, timestamp_str)
+    timestamp_str = timestamp_str + '-'
+    CNV_INT_STR(day_val, 2, 0, timestamp_str)
+    timestamp_str = timestamp_str + ' '
+    CNV_INT_STR(hour_val, 2, 0, timestamp_str)
+    timestamp_str = timestamp_str + ':'
+    CNV_INT_STR(min_val, 2, 0, timestamp_str)
+    timestamp_str = timestamp_str + ':'
+    CNV_INT_STR(sec_val, 2, 0, timestamp_str)
+    
+    -- Write data line
+    WRITE file_id (timestamp_str, ',')
+    WRITE file_id (cycle_num, ',')
+    WRITE file_id (vis_score::6::1, ',')
+    WRITE file_id (x_offset::7::2, ',')
+    WRITE file_id (y_offset::7::2, ',')
+    WRITE file_id (r_offset::6::2, ',')
+    WRITE file_id (cycle_time::8::0, ',')
+    WRITE file_id (retry_flag)
+    WRITE file_id (CR)
+END write_data
+
+-- =============================================================================
+-- MAIN PROGRAM
+-- =============================================================================
+BEGIN
+    -- Build file name with date
+    get_timestamp
+    file_name = LOG_PATH + 'vision_log.csv'
+    
+    -- Check and rotate file if needed
+    check_file_size
+    
+    -- Read data from TP registers
+    read_registers
+    
+    -- Open file for append
+    OPEN FILE file_id ('AP', file_name)
+    file_status = IO_STATUS(file_id)
+    
+    IF file_status <> 0 THEN
+        -- File doesn't exist, create with header
+        OPEN FILE file_id ('RW', file_name)
+        write_header
+    ENDIF
+    
+    -- Write data
+    write_data
+    
+    -- Close file
+    CLOSE FILE file_id
+    
+END vis_logger
